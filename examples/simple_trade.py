@@ -23,17 +23,19 @@ def main():
     print("=" * 60)
     
     # 创建客户端（请替换为您的配置）
+    # ✨ 设置 trader_index=0，后续调用无需再传递
     client = QMTTradeClient(
         base_url="http://localhost:9091",
         client_id="your_client_id",
-        secret_key="your_secret_key"
+        secret_key="your_secret_key",
+        trader_index=0  # ✨ 只需设置一次
     )
     
     # 1. 查询账户资产
     print("\n【1. 查询账户资产】")
     print("-" * 60)
     try:
-        portfolio = client.get_portfolio(0)
+        portfolio = client.get_portfolio()  # ✨ 无需传递 trader_index
         print(f"总资产:     ¥{portfolio['total_asset']:>15,.2f}")
         print(f"可用金额:   ¥{portfolio['cash']:>15,.2f}")
         print(f"冻结金额:   ¥{portfolio['frozen_cash']:>15,.2f}")
@@ -46,7 +48,7 @@ def main():
     print("\n【2. 查询持仓信息】")
     print("-" * 60)
     try:
-        positions = client.get_positions(0)
+        positions = client.get_positions()  # ✨ 无需传递 trader_index
         if positions:
             for pos in positions:
                 print(f"\n{pos['symbol']} {pos['name']}")
@@ -95,9 +97,9 @@ def main():
     print("\n【4. 卖出示例】")
     print("-" * 60)
     
-    # 检查是否持有该股票
-    if client.has_position(f"{symbol}.SZ", trader_index=0):
-        pos = client.get_position_by_symbol(f"{symbol}.SZ", trader_index=0)
+    # 检查是否持有该股票 - 无需传递 trader_index
+    if client.has_position(f"{symbol}.SZ"):  # ✨ 使用默认 trader_index
+        pos = client.get_position_by_symbol(f"{symbol}.SZ")  # ✨ 使用默认 trader_index
         
         sell_price = 10.60
         sell_shares = 500

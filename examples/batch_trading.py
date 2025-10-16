@@ -255,11 +255,12 @@ def main():
     print("批量交易示例")
     print("=" * 60)
     
-    # 创建客户端
+    # 创建客户端（设置默认 trader_index）
     client = QMTTradeClient(
         base_url="http://localhost:9091",
         client_id="batch_trader",
-        secret_key="your_secret_key"
+        secret_key="your_secret_key",
+        trader_index=0  # ✨ 设置默认交易器索引
     )
     
     while True:

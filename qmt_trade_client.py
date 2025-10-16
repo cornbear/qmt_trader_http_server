@@ -83,7 +83,8 @@ class QMTTradeClient:
         base_url: str = "http://localhost:9091",
         client_id: Optional[str] = None,
         secret_key: Optional[str] = None,
-        timeout: int = 30
+        timeout: int = 30,
+        trader_index: int = 0
     ):
         """
         初始化QMT交易客户端
@@ -93,18 +94,20 @@ class QMTTradeClient:
             client_id: API客户端ID（使用签名认证时必需）
             secret_key: API密钥（使用签名认证时必需）
             timeout: 请求超时时间（秒），默认30秒
+            trader_index: 默认交易器索引，默认0（可在调用时覆盖）
         """
         self.base_url = base_url.rstrip('/')
         self.client_id = client_id
         self.secret_key = secret_key
         self.timeout = timeout
+        self.trader_index = trader_index
         self.session = requests.Session()
         self.use_signature = bool(client_id and secret_key)
         
         if self.use_signature:
-            print(f"✓ 使用API签名认证模式 (client_id: {client_id})")
+            print(f"✓ 使用API签名认证模式 (client_id: {client_id}, trader_index: {trader_index})")
         else:
-            print("✓ 使用登录会话认证模式")
+            print(f"✓ 使用登录会话认证模式 (trader_index: {trader_index})")
     
     def _generate_signature(
         self, 
@@ -273,40 +276,44 @@ class QMTTradeClient:
         response = self._request('GET', '/qmt/trade/api/accounts')
         return response.get('accounts', [])
     
-    def get_portfolio(self, trader_index: int = 0) -> Dict[str, float]:
+    def get_portfolio(self, trader_index: Optional[int] = None) -> Dict[str, float]:
         """
         获取账户资产信息
         
         Args:
-            trader_index: 交易器索引，默认0
+            trader_index: 交易器索引，None时使用初始化时设置的默认值
             
         Returns:
             资产信息字典，包含: total_asset, cash, frozen_cash, market_value, profit, profit_ratio
             
         Example:
-            >>> portfolio = client.get_portfolio(0)
+            >>> portfolio = client.get_portfolio()  # 使用默认trader_index
             >>> print(f"总资产: {portfolio['total_asset']}")
             >>> print(f"可用金额: {portfolio['cash']}")
         """
+        if trader_index is None:
+            trader_index = self.trader_index
         response = self._request('GET', f'/qmt/trade/api/portfolio/{trader_index}')
         return response.get('portfolio', {})
     
-    def get_positions(self, trader_index: int = 0) -> List[Dict[str, Any]]:
+    def get_positions(self, trader_index: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         获取账户持仓信息
         
         Args:
-            trader_index: 交易器索引，默认0
+            trader_index: 交易器索引，None时使用初始化时设置的默认值
             
         Returns:
             持仓列表，每个持仓包含: symbol, name, volume, can_use_volume, 
                                   market_value, avg_price, current_price, profit等
             
         Example:
-            >>> positions = client.get_positions(0)
+            >>> positions = client.get_positions()  # 使用默认trader_index
             >>> for pos in positions:
             >>>     print(f"{pos['symbol']} {pos['name']}: {pos['volume']}股")
         """
+        if trader_index is None:
+            trader_index = self.trader_index
         response = self._request('GET', f'/qmt/trade/api/positions/{trader_index}')
         return response.get('positions', [])
     
@@ -681,21 +688,23 @@ class QMTTradeClient:
     
     # ==================== 便捷方法 ====================
     
-    def get_account_summary(self, trader_index: int = 0) -> Dict[str, Any]:
+    def get_account_summary(self, trader_index: Optional[int] = None) -> Dict[str, Any]:
         """
         获取账户汇总信息（资产+持仓）
         
         Args:
-            trader_index: 交易器索引，默认0
+            trader_index: 交易器索引，None时使用初始化时设置的默认值
             
         Returns:
             包含资产和持仓的汇总信息
             
         Example:
-            >>> summary = client.get_account_summary(0)
+            >>> summary = client.get_account_summary()  # 使用默认trader_index
             >>> print(f"总资产: {summary['portfolio']['total_asset']}")
             >>> print(f"持仓数量: {len(summary['positions'])}")
         """
+        if trader_index is None:
+            trader_index = self.trader_index
         return {
             'portfolio': self.get_portfolio(trader_index),
             'positions': self.get_positions(trader_index),
@@ -705,44 +714,48 @@ class QMTTradeClient:
     def get_position_by_symbol(
         self, 
         symbol: str, 
-        trader_index: int = 0
+        trader_index: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """
         查询指定股票的持仓
         
         Args:
             symbol: 股票代码
-            trader_index: 交易器索引，默认0
+            trader_index: 交易器索引，None时使用初始化时设置的默认值
             
         Returns:
             持仓信息，如果没有持仓返回None
             
         Example:
-            >>> pos = client.get_position_by_symbol("000001.SZ")
+            >>> pos = client.get_position_by_symbol("000001.SZ")  # 使用默认trader_index
             >>> if pos:
             >>>     print(f"持有 {pos['volume']} 股")
         """
+        if trader_index is None:
+            trader_index = self.trader_index
         positions = self.get_positions(trader_index)
         for pos in positions:
             if pos.get('symbol') == symbol:
                 return pos
         return None
     
-    def has_position(self, symbol: str, trader_index: int = 0) -> bool:
+    def has_position(self, symbol: str, trader_index: Optional[int] = None) -> bool:
         """
         检查是否持有某只股票
         
         Args:
             symbol: 股票代码
-            trader_index: 交易器索引，默认0
+            trader_index: 交易器索引，None时使用初始化时设置的默认值
             
         Returns:
             是否持有该股票
             
         Example:
-            >>> if client.has_position("000001.SZ"):
+            >>> if client.has_position("000001.SZ"):  # 使用默认trader_index
             >>>     print("持有该股票")
         """
+        if trader_index is None:
+            trader_index = self.trader_index
         return self.get_position_by_symbol(symbol, trader_index) is not None
     
     def sell_all(
@@ -757,14 +770,15 @@ class QMTTradeClient:
         Args:
             symbol: 股票代码
             price: 卖出价格
-            trader_index: 交易器索引，None表示所有交易器执行
+            trader_index: 交易器索引，None时使用初始化时设置的默认值
             
         Returns:
             交易结果
             
         Example:
-            >>> result = client.sell_all("000001", price=10.60)
+            >>> result = client.sell_all("000001", price=10.60)  # 使用默认trader_index
         """
+        # 注意：这里不需要额外处理 trader_index，因为 sell() 方法会处理
         return self.sell(
             symbol=symbol,
             price=price,
@@ -803,7 +817,8 @@ def example_usage():
     print("\n【方式1: 使用登录会话】")
     print("-" * 60)
     
-    client = QMTTradeClient("http://localhost:9091")
+    # 初始化时设置默认的 trader_index
+    client = QMTTradeClient("http://localhost:9091", trader_index=0)
     
     # 登录
     try:
@@ -818,16 +833,16 @@ def example_usage():
     for acc in accounts:
         print(f"  - 账户{acc['index']}: {acc['nick_name']} ({acc['account_id']})")
     
-    # 查询资产
+    # 查询资产 - 无需传递 trader_index
     print("\n2. 查询账户资产")
-    portfolio = client.get_portfolio(0)
+    portfolio = client.get_portfolio()  # 使用初始化时设置的 trader_index=0
     print(f"  总资产: ¥{portfolio['total_asset']:,.2f}")
     print(f"  可用金额: ¥{portfolio['cash']:,.2f}")
     print(f"  持仓市值: ¥{portfolio['market_value']:,.2f}")
     
-    # 查询持仓
+    # 查询持仓 - 无需传递 trader_index
     print("\n3. 查询持仓信息")
-    positions = client.get_positions(0)
+    positions = client.get_positions()  # 使用初始化时设置的 trader_index=0
     for pos in positions:
         print(f"  - {pos['symbol']} {pos['name']}: {pos['volume']}股, "
               f"成本¥{pos['avg_price']:.2f}, "
@@ -841,10 +856,12 @@ def example_usage():
     print("\n\n【方式2: 使用API签名（推荐用于程序化交易）】")
     print("-" * 60)
     
+    # 初始化时设置默认的 trader_index
     client = QMTTradeClient(
         "http://localhost:9091",
         client_id="your_client_id",
-        secret_key="your_secret_key"
+        secret_key="your_secret_key",
+        trader_index=0  # 设置默认交易器索引
     )
     
     # 按仓位比例买入
@@ -895,10 +912,10 @@ def example_usage():
     except QMTAPIError as e:
         print(f"  ✗ 逆回购失败: {e}")
     
-    # 查询账户汇总
+    # 查询账户汇总 - 无需传递 trader_index
     print("\n10. 查询账户汇总信息")
     try:
-        summary = client.get_account_summary(0)
+        summary = client.get_account_summary()  # 使用默认 trader_index
         print(f"  总资产: ¥{summary['portfolio']['total_asset']:,.2f}")
         print(f"  持仓数量: {len(summary['positions'])}只")
         print(f"  查询时间: {summary['timestamp']}")
@@ -907,7 +924,7 @@ def example_usage():
     
     # 使用with语句
     print("\n11. 使用with语句（自动管理会话）")
-    with QMTTradeClient("http://localhost:9091") as client:
+    with QMTTradeClient("http://localhost:9091", trader_index=0) as client:
         accounts = client.get_accounts()
         print(f"  账户数量: {len(accounts)}")
     

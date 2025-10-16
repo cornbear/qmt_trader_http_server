@@ -181,17 +181,18 @@ class PositionMonitor:
 def main():
     """主函数"""
     
-    # 创建客户端
+    # 创建客户端（设置默认 trader_index）
     client = QMTTradeClient(
         base_url="http://localhost:9091",
         client_id="position_monitor",
-        secret_key="your_secret_key"
+        secret_key="your_secret_key",
+        trader_index=0  # ✨ 设置默认交易器索引
     )
     
     # 创建监控器
     monitor = PositionMonitor(
         client=client,
-        trader_index=0,
+        trader_index=0,  # 这里保留，因为监控器需要明确指定
         stop_profit_ratio=10.0,   # 盈利10%时止盈
         stop_loss_ratio=-5.0,     # 亏损5%时止损
         stop_profit_sell_ratio=0.5,  # 止盈时卖出50%
