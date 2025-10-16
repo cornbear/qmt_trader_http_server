@@ -183,5 +183,21 @@ def handle_exception(e):
 if __name__ == '__main__':
     log.info("启动Flask应用")
     log.info(f"服务器配置: {config.flask.host}:{config.flask.port}, Debug: {config.flask.debug}")
-    app.run(debug=config.flask.debug, host=config.flask.host, port=config.flask.port)
+    
+    if config.flask.debug:
+        # 开发模式使用Flask自带服务器（支持热重载）
+        log.info("使用Flask开发服务器（支持热重载）")
+        app.run(debug=True, host=config.flask.host, port=config.flask.port)
+    else:
+        # 生产模式使用Waitress服务器
+        log.info("使用Waitress生产服务器")
+        try:
+            from waitress import serve
+            log.info(f"Waitress服务器启动成功: http://{config.flask.host}:{config.flask.port}")
+            serve(app, host=config.flask.host, port=config.flask.port, threads=4)
+        except ImportError:
+            log.error("未安装waitress，请运行: pip install waitress")
+            log.warning("降级使用Flask开发服务器")
+            app.run(debug=False, host=config.flask.host, port=config.flask.port)
+    
     log.info("Flask应用已停止")
