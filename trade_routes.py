@@ -224,6 +224,14 @@ def buy_stock():
     """
     按固定股数/张数买入
     支持：股票（100股为最小单位）、可转债（10张为最小单位）
+    
+    请求参数：
+        - symbol: 股票代码 (必需)
+        - price: 买入价格 (必需)
+        - shares: 买入股数/张数 (必需)
+        - price_type: 价格类型，默认0 (可选)
+        - strategy_name: 策略名称，默认'Web界面' (可选)
+        - trader_index: 交易器索引，不提供则所有交易器执行 (可选)
     """
     data = request.get_json()
     if not data:
@@ -234,14 +242,24 @@ def buy_stock():
     shares = data.get('shares')
     price_type = data.get('price_type', 0)
     strategy_name = data.get('strategy_name', 'Web界面')
+    trader_index = data.get('trader_index')  # ✨ 新增：支持指定交易器
 
     if not symbol or price is None or shares is None:
         return jsonify({'error': '缺少必要参数: symbol, price, shares'}), 400
 
-    log.info(f"开始买入: symbol={symbol}, price={price}, shares={shares}, strategy={strategy_name}")
+    # 验证交易器索引
+    if trader_index is not None and (trader_index >= len(traders) or trader_index < 0):
+        log.error(f"无效的交易器索引: {trader_index}")
+        return jsonify({"error": f"无效的交易器索引: {trader_index}"}), 400
+
+    log.info(f"开始买入: symbol={symbol}, price={price}, shares={shares}, strategy={strategy_name}, trader_index={trader_index}")
 
     results = []
     for i, trader in enumerate(traders):
+        # ✨ 新增：支持指定交易器执行
+        if trader_index is not None and i != trader_index:
+            continue
+        
         try:
             log.info(f"交易器{i}开始买入")
             result = trader.trade_buy_shares(symbol, price, shares, price_type, strategy_name=strategy_name)
@@ -262,6 +280,14 @@ def sell_stock():
     """
     卖出股票/可转债
     支持：股票（100股为最小单位）、可转债（10张为最小单位）
+    
+    请求参数：
+        - symbol: 股票代码 (必需)
+        - price: 卖出价格 (必需)
+        - shares: 卖出股数/张数 (必需)
+        - price_type: 价格类型，默认0 (可选)
+        - strategy_name: 策略名称，默认'Web界面' (可选)
+        - trader_index: 交易器索引，不提供则所有交易器执行 (可选)
     """
     data = request.get_json()
     if not data:
@@ -272,14 +298,24 @@ def sell_stock():
     shares = data.get('shares')
     price_type = data.get('price_type', 0)
     strategy_name = data.get('strategy_name', 'Web界面')
+    trader_index = data.get('trader_index')  # ✨ 新增：支持指定交易器
 
     if not symbol or price is None or shares is None:
         return jsonify({'error': '缺少必要参数: symbol, price, shares'}), 400
 
-    log.info(f"开始卖出: symbol={symbol}, price={price}, shares={shares}, strategy={strategy_name}")
+    # 验证交易器索引
+    if trader_index is not None and (trader_index >= len(traders) or trader_index < 0):
+        log.error(f"无效的交易器索引: {trader_index}")
+        return jsonify({"error": f"无效的交易器索引: {trader_index}"}), 400
+
+    log.info(f"开始卖出: symbol={symbol}, price={price}, shares={shares}, strategy={strategy_name}, trader_index={trader_index}")
 
     results = []
     for i, trader in enumerate(traders):
+        # ✨ 新增：支持指定交易器执行
+        if trader_index is not None and i != trader_index:
+            continue
+        
         try:
             log.info(f"交易器{i}开始卖出")
             result = trader.trade_sell(symbol, price, shares, price_type, strategy_name=strategy_name)
@@ -297,7 +333,17 @@ def sell_stock():
 @login_required
 @handle_exceptions
 def trade():
-    """执行交易"""
+    """
+    按仓位比例交易
+    
+    请求参数：
+        - symbol: 股票代码 (必需)
+        - trade_price: 交易价格 (必需)
+        - position_pct: 仓位比例 (必需，0-1之间)
+        - pricetype: 价格类型，默认0 (可选)
+        - strategy_name: 策略名称，默认'Web界面' (可选)
+        - trader_index: 交易器索引，不提供则所有交易器执行 (可选)
+    """
 
     # 获取请求参数
     data = request.get_json()
@@ -310,17 +356,27 @@ def trade():
     position_pct = data.get('position_pct')
     pricetype = data.get('pricetype', 0)
     strategy_name = data.get('strategy_name', 'Web界面')
+    trader_index = data.get('trader_index')  # ✨ 新增：支持指定交易器
 
     # 参数验证
     if not symbol or trade_price is None or position_pct is None:
         log.error(f"参数不完整: symbol={symbol}, trade_price={trade_price}, position_pct={position_pct}")
         return jsonify({"error": "缺少必要参数: symbol, trade_price, position_pct"}), 400
 
-    log.info(f"开始执行交易: symbol={symbol}, trade_price={trade_price}, position_pct={position_pct}, strategy={strategy_name}")
+    # 验证交易器索引
+    if trader_index is not None and (trader_index >= len(traders) or trader_index < 0):
+        log.error(f"无效的交易器索引: {trader_index}")
+        return jsonify({"error": f"无效的交易器索引: {trader_index}"}), 400
+
+    log.info(f"开始执行交易: symbol={symbol}, trade_price={trade_price}, position_pct={position_pct}, strategy={strategy_name}, trader_index={trader_index}")
 
     # 执行交易
     results = []
     for i, trader in enumerate(traders):
+        # ✨ 新增：支持指定交易器执行
+        if trader_index is not None and i != trader_index:
+            continue
+        
         try:
             log.info(f"交易器{i}开始执行交易")
             result = trader.trade_target_pct(symbol, trade_price, position_pct, pricetype, strategy_name=strategy_name)

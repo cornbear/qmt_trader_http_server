@@ -676,7 +676,8 @@
                     body: JSON.stringify({
                         symbol: symbol,
                         price: trade_price,
-                        shares: shares
+                        shares: shares,
+                        trader_index: accountIndex  // ✨ 新增：传递当前账户索引
                     })
                 })
                 .then(response => response.json())
@@ -747,6 +748,9 @@
         
         // 执行按仓位比例买入
         function executeBuyByPosition(formData, accountIndex) {
+            // ✨ 新增：添加当前账户索引
+            formData.trader_index = accountIndex;
+            
             fetch('/qmt/trade/api/trade', {
                 method: 'POST',
                 headers: {
@@ -807,7 +811,8 @@
             const formData = {
                 symbol: symbol,
                 price: price,
-                shares: shares
+                shares: shares,
+                trader_index: accountIndex  // ✨ 新增：传递当前账户索引
             };
 
             fetch('/qmt/trade/api/sell', {
