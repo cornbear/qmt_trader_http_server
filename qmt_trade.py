@@ -31,6 +31,66 @@ ORDER_STATUS_MAP = {
 }
 
 
+def is_convertible_bond(symbol):
+    """
+    判断是否是可转债
+    可转债代码特征：
+    - 沪市：110xxx.SH, 113xxx.SH (6位数字，11或113开头)
+    - 深市：123xxx.SZ, 127xxx.SZ, 128xxx.SZ (6位数字，12开头)
+    
+    Args:
+        symbol: 证券代码，如 '110001.SH', '123456.SZ'
+    
+    Returns:
+        bool: 是否是可转债
+    """
+    if not symbol:
+        return False
+    
+    # 提取代码部分（去除市场后缀）
+    code = symbol.split('.')[0] if '.' in symbol else symbol
+    
+    # 判断是否是可转债代码
+    if len(code) == 6:
+        # 沪市可转债：11开头（110xxx, 113xxx）
+        if code.startswith('11'):
+            return True
+        # 深市可转债：12开头（123xxx, 127xxx, 128xxx）
+        if code.startswith('12'):
+            return True
+    
+    return False
+
+
+def get_min_trade_unit(symbol):
+    """
+    获取证券的最小交易单位
+    
+    Args:
+        symbol: 证券代码
+    
+    Returns:
+        int: 最小交易单位（股票100股，可转债10张）
+    """
+    if is_convertible_bond(symbol):
+        return 10  # 可转债最小10张
+    else:
+        return 100  # 股票最小100股
+
+
+def get_unit_name(symbol):
+    """
+    获取证券的单位名称
+    
+    Args:
+        symbol: 证券代码
+    
+    Returns:
+        str: 单位名称（"张"或"股"）
+    """
+    return "张" if is_convertible_bond(symbol) else "股"
+
+
 class MyXtQuantTraderCallback(XtQuantTraderCallback):
     def on_disconnected(self):
         """
@@ -184,12 +244,13 @@ class MyTradeAPIWrapper:
         send_msg(msg)
         sys.exit('链接失败，程序即将退出 %d' % connect_result)
 
-    def trade_target_pct(self, symbol, cur_price, pct_target=0.1, price_type=0, record=1):
+    def trade_target_pct(self, symbol, cur_price, pct_target=0.1, price_type=0, record=1, strategy_name=None):
         """指定仓位买入
         symbol: 股票代码
         cur_price: 当前价格
         pct_target: 仓位比例
         price_type: 0：限价
+        strategy_name: 策略名称，如果不提供则使用默认值
         """
         for _ in range(3):
             try:
@@ -199,7 +260,7 @@ class MyTradeAPIWrapper:
                 value = total_value * pct_target
                 if value > available_cash:
                     value = available_cash
-                result = self.trade_buy(symbol, cur_price, value, price_type, record)
+                result = self.trade_buy(symbol, cur_price, value, price_type, record, strategy_name)
                 send_msg(result)
                 return result
             except Exception as e:
@@ -217,14 +278,17 @@ class MyTradeAPIWrapper:
                     }
                 continue
 
-    def trade_sell_target_pct(self, symbol, cur_price, pct_target, price_type=0):
+    def trade_sell_target_pct(self, symbol, cur_price, pct_target, price_type=0, strategy_name=None):
         """指定仓位卖出
         symbol: 股票代码
         cur_price: 当前价格
         pct_target: 仓位比例,持仓的仓位比例，如果全部卖出就是1，卖出半仓就是0.5
+        strategy_name: 策略名称，如果不提供则使用默认值
         """
         log.info("%s sell %s %s" % (self.account_id, symbol, cur_price))
         symbol = symbol_convert(symbol)
+        min_unit = get_min_trade_unit(symbol)
+        unit_name = get_unit_name(symbol)
         _p = self.get_position()
         if symbol in _p:
             if hasattr(_p[symbol], 'can_use_volume'):
@@ -232,8 +296,9 @@ class MyTradeAPIWrapper:
             else:
                 order_num = _p[symbol].get('can_use_volume', 0)
             order_num_sell = order_num * pct_target
-            order_num_sell = int(order_num_sell / 100) * 100
-            result = self.trade_sell(symbol, cur_price, order_num_sell, price_type)
+            order_num_sell = int(order_num_sell / min_unit) * min_unit
+            log.info(f"sell_target_pct: {symbol} {order_num}{unit_name} * {pct_target} = {order_num_sell}{unit_name}")
+            result = self.trade_sell(symbol, cur_price, order_num_sell, price_type, strategy_name)
             send_msg(result)
             return result
         else:
@@ -380,16 +445,21 @@ class MyTradeAPIWrapper:
                 log.info(f"Error get_portfolio: {e}")
                 self.connect_trade_api()  # 重新连接TradeAPI
 
-    def trade_buy(self, symbol, cur_price, value, price_type=0, record=1):
+    def trade_buy(self, symbol, cur_price, value, price_type=0, record=1, strategy_name=None):
         try:
-            strategy_name = f"quant_{self.quant_code}"
+            # 如果没有提供策略名称，使用默认值
+            if strategy_name is None:
+                strategy_name = f"quant_{self.quant_code}"
             _portfolio = self.get_portfolio()
             available_cash = _portfolio.cash
             if value > available_cash:
                 value = available_cash
             symbol = symbol_convert(symbol)
-            order_num = math.floor(value / cur_price / 100) * 100
-            log.info(f"{strategy_name} buy {symbol} {order_num}")
+            # 根据证券类型获取最小交易单位（股票100，可转债10）
+            min_unit = get_min_trade_unit(symbol)
+            unit_name = get_unit_name(symbol)
+            order_num = math.floor(value / cur_price / min_unit) * min_unit
+            log.info(f"{strategy_name} buy {symbol} {order_num}{unit_name} (最小单位:{min_unit})")
             if order_num > 0:
                 for _ in range(3):
                     try:
@@ -424,14 +494,16 @@ class MyTradeAPIWrapper:
                         'message': f'资金不足: 需要{value}, 可用{available_cash}'
                     }
                 else:
-                    log.info(f"{self.account_id} money={value} not enough to buy 100股")
+                    min_unit = get_min_trade_unit(symbol)
+                    unit_name = get_unit_name(symbol)
+                    log.info(f"{self.account_id} money={value} not enough to buy {min_unit}{unit_name}")
                     return {
                         'success': False,
                         'symbol': symbol,
                         'order_num': 0,
                         'price': cur_price,
                         'error': 'Insufficient funds',
-                        'message': f'指定仓位资金不足: 最低100股需要:{cur_price * 100:.2f}, 当前可用:{available_cash}'
+                        'message': f'指定仓位资金不足: 最低{min_unit}{unit_name}需要:{cur_price * min_unit:.2f}, 当前可用:{available_cash}'
                     }
 
         except Exception as e:
@@ -518,10 +590,18 @@ class MyTradeAPIWrapper:
             'message': f'{"买入" if order_type == xtconstant.STOCK_BUY else "卖出"}限价单提交成功: {symbol} {order_num}股 @{cur_price}, OrderID: {order_result}'
         }
 
-    def trade_buy_shares(self, symbol, cur_price, shares, price_type=0, record=1):
-        """按固定股数买入股票"""
+    def trade_buy_shares(self, symbol, cur_price, shares, price_type=0, record=1, strategy_name=None):
+        """按固定股数/张数买入（股票100股，可转债10张）"""
         try:
-            strategy_name = f"quant_{self.quant_code}"
+            # 如果没有提供策略名称，使用默认值
+            if strategy_name is None:
+                strategy_name = f"quant_{self.quant_code}"
+            
+            # 先转换symbol以便判断类型
+            symbol = symbol_convert(symbol)
+            min_unit = get_min_trade_unit(symbol)
+            unit_name = get_unit_name(symbol)
+            
             _portfolio = self.get_portfolio()
             available_cash = _portfolio.cash
 
@@ -529,8 +609,8 @@ class MyTradeAPIWrapper:
             required_value = shares * cur_price
             if required_value > available_cash:
                 log.info(f"{self.account_id} 资金不足: 需要{required_value}, 可用{available_cash}")
-                # 按可用资金调整股数
-                shares = math.floor(available_cash / cur_price / 100) * 100
+                # 按可用资金调整股数/张数
+                shares = math.floor(available_cash / cur_price / min_unit) * min_unit
                 if shares <= 0:
                     log.info(f"{self.account_id} 资金不足，无法买入")
                     return {
@@ -543,10 +623,10 @@ class MyTradeAPIWrapper:
                         'message': f'资金不足，无法买入: 需要{required_value}, 可用{available_cash}'
                     }
 
-            symbol = symbol_convert(symbol)
-            # 确保股数是100的倍数
-            order_num = int(shares / 100) * 100
+            # 确保股数/张数是最小单位的倍数
+            order_num = int(shares / min_unit) * min_unit
             value = order_num * cur_price
+            log.info(f"{strategy_name} buy_shares {symbol} {order_num}{unit_name} (最小单位:{min_unit})")
 
             if order_num > 0:
                 for _ in range(3):
@@ -575,7 +655,7 @@ class MyTradeAPIWrapper:
                             }
                         continue
             else:
-                log.info(f"{self.account_id} 股数={shares} 不足100股")
+                log.info(f"{self.account_id} 股数/张数={shares} 不足{min_unit}{unit_name}")
                 return {
                     'success': False,
                     'symbol': symbol,
@@ -583,7 +663,7 @@ class MyTradeAPIWrapper:
                     'price': cur_price,
                     'value': 0,
                     'order_result': None,
-                    'message': f'股数不足100股: {shares}'
+                    'message': f'{unit_name}数不足{min_unit}{unit_name}: {shares}'
                 }
         except Exception as e:
             log.error(traceback.format_exc())
@@ -600,20 +680,101 @@ class MyTradeAPIWrapper:
     def trade_allin(self, symbol, cur_price):
         self.trade_target_pct(symbol, cur_price, 1)
 
-    def nhg(self):
-        """逆回购"""
-        value = self.get_portfolio().cash
-        order_num = math.floor(value / 100 / 10) * 10
-        if order_num > 0:
-            self.trade_api.order_stock(self.acc, "131810.SZ", xtconstant.STOCK_SELL, order_num, xtconstant.LATEST_PRICE,
-                                       0)
-            # self.trade_api.order("131990.SH", -order_num, 1)
+    def nhg(self, reserve_amount=0):
+        """
+        逆回购 - 使用可用资金购买逆回购（深圳R-001: 131810.SZ）
+        
+        Args:
+            reserve_amount: 保留资金金额（元），默认0表示全部可用资金购买逆回购
+                          可以是固定金额，如 1000 表示保留1000元
+        
+        Returns:
+            dict: 交易结果
+        """
+        try:
+            _portfolio = self.get_portfolio()
+            available_cash = _portfolio.cash
+            
+            # 计算用于购买逆回购的资金
+            if reserve_amount < 0:
+                reserve_amount = 0  # 保留金额不能为负数
+                
+            usable_cash = available_cash - reserve_amount
+            
+            if usable_cash < 1000:  # 逆回购最低1000元（100张×10元）
+                log.info(f"{self.account_id} 逆回购资金不足: 可用{available_cash}, 保留{reserve_amount}, 剩余{usable_cash}")
+                return {
+                    'success': False,
+                    'symbol': '131810.SZ',
+                    'order_num': 0,
+                    'available_cash': available_cash,
+                    'reserve_amount': reserve_amount,
+                    'usable_cash': usable_cash,
+                    'message': f'逆回购资金不足: 最低需要1000元, 当前可用{usable_cash}元'
+                }
+            
+            # 逆回购以100元为单位，数量为千元（100元×10）的整数倍
+            order_num = math.floor(usable_cash / 100 / 10) * 10
+            actual_amount = order_num * 100  # 实际使用金额
+            
+            log.info(f"{self.account_id} 逆回购: 可用{available_cash}元, 保留{reserve_amount}元, 购买{order_num}张(约{actual_amount}元)")
+            
+            if order_num > 0:
+                # 深圳R-001: 131810.SZ (也可以选择上海 131990.SH)
+                order_result = self.trade_api.order_stock(
+                    self.acc, 
+                    "131810.SZ", 
+                    xtconstant.STOCK_SELL,  # 逆回购是卖出操作
+                    order_num, 
+                    xtconstant.LATEST_PRICE,
+                    0
+                )
+                
+                log.info(f"{self.account_id} 逆回购订单提交: {order_num}张, OrderID: {order_result}")
+                
+                return {
+                    'success': True,
+                    'symbol': '131810.SZ',
+                    'order_num': order_num,
+                    'order_amount': actual_amount,
+                    'available_cash': available_cash,
+                    'reserve_amount': reserve_amount,
+                    'usable_cash': usable_cash,
+                    'order_id': order_result,
+                    'message': f'逆回购订单提交成功: {order_num}张(约{actual_amount}元), 保留{reserve_amount}元, OrderID: {order_result}'
+                }
+            else:
+                return {
+                    'success': False,
+                    'symbol': '131810.SZ',
+                    'order_num': 0,
+                    'available_cash': available_cash,
+                    'reserve_amount': reserve_amount,
+                    'usable_cash': usable_cash,
+                    'message': f'逆回购数量不足: 可用{usable_cash}元不足购买10张'
+                }
+                
+        except Exception as e:
+            log.error(f"{self.account_id} 逆回购失败: {str(e)}")
+            log.error(traceback.format_exc())
+            return {
+                'success': False,
+                'symbol': '131810.SZ',
+                'order_num': 0,
+                'error': str(e),
+                'message': f'逆回购操作异常: {str(e)}'
+            }
 
-    def trade_sell(self, symbol, cur_price, order_num, price_type=0):
+    def trade_sell(self, symbol, cur_price, order_num, price_type=0, strategy_name=None):
         """执行卖出操作，并更新持仓"""
         try:  # 不让账户相互之间有冲突，比如登录失效不影响下面的
+            # 如果没有提供策略名称，使用默认值
+            if strategy_name is None:
+                strategy_name = f"quant_{self.quant_code}"
             log.info("%s sell %s %s %s" % (self.account_id, symbol, cur_price, order_num))
             symbol = symbol_convert(symbol)
+            min_unit = get_min_trade_unit(symbol)
+            unit_name = get_unit_name(symbol)
             _p = self.get_position()
             if symbol in _p:
                 if order_num is None or order_num == 0:
@@ -621,14 +782,14 @@ class MyTradeAPIWrapper:
                         order_num = _p[symbol].can_use_volume
                     else:
                         order_num = _p[symbol].get('can_use_volume', 0)
-                log.info("%s: do sell %s %s %s" % (self.account_id, symbol, cur_price, order_num))
-                if order_num >= 100:
+                log.info("%s: do sell %s %s %s%s" % (self.account_id, symbol, cur_price, order_num, unit_name))
+                if order_num >= min_unit:
                     value = order_num * cur_price
-                    order_result = self.order_dif_type(cur_price, order_num, price_type, f"quant_{self.quant_code}", symbol, xtconstant.STOCK_SELL)
+                    order_result = self.order_dif_type(cur_price, order_num, price_type, strategy_name, symbol, xtconstant.STOCK_SELL)
 
                     return order_result
                 else:
-                    log.info("order_num error %s %s" % (symbol, order_num))
+                    log.info("order_num error %s %s%s" % (symbol, order_num, unit_name))
                     return {
                         'success': False,
                         'symbol': symbol,
@@ -636,7 +797,7 @@ class MyTradeAPIWrapper:
                         'price': cur_price,
                         'value': 0,
                         'order_result': None,
-                        'message': f'卖出股数不足100股: {order_num}'
+                        'message': f'卖出{unit_name}数不足{min_unit}{unit_name}: {order_num}'
                     }
             else:
                 return {

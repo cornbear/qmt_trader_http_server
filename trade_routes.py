@@ -4,6 +4,8 @@ from logger_config import get_logger
 from config import get_config
 from functools import wraps
 from authentication import login_or_signature_required, api_signature_required
+from qmt_trade import is_convertible_bond, get_min_trade_unit, get_unit_name
+import symbol_util
 
 
 # 通用异常处理装饰器
@@ -215,11 +217,14 @@ def get_positions(trader_index):
     return jsonify({'positions': position_list})
 
 
-@trade_bp.route('/sell', methods=['POST'])
+@trade_bp.route('/buy', methods=['POST'])
 @login_required
 @handle_exceptions
-def sell_stock():
-    """卖出股票"""
+def buy_stock():
+    """
+    按固定股数/张数买入
+    支持：股票（100股为最小单位）、可转债（10张为最小单位）
+    """
     data = request.get_json()
     if not data:
         return jsonify({'error': '请求数据不能为空'}), 400
@@ -227,17 +232,57 @@ def sell_stock():
     symbol = data.get('symbol')
     price = data.get('price')
     shares = data.get('shares')
+    price_type = data.get('price_type', 0)
+    strategy_name = data.get('strategy_name', 'Web界面')
 
     if not symbol or price is None or shares is None:
         return jsonify({'error': '缺少必要参数: symbol, price, shares'}), 400
 
-    log.info(f"开始卖出: symbol={symbol}, price={price}, shares={shares}")
+    log.info(f"开始买入: symbol={symbol}, price={price}, shares={shares}, strategy={strategy_name}")
+
+    results = []
+    for i, trader in enumerate(traders):
+        try:
+            log.info(f"交易器{i}开始买入")
+            result = trader.trade_buy_shares(symbol, price, shares, price_type, strategy_name=strategy_name)
+            results.append({'trader_index': i, 'result': result, 'status': 'success'})
+            log.info(f"交易器{i}买入完成: {result}")
+        except Exception as e:
+            error_msg = f"交易器{i}买入失败: {str(e)}"
+            log.error(error_msg, exc_info=True)
+            results.append({'trader_index': i, 'error': error_msg, 'status': 'failed'})
+
+    return jsonify({'message': '买入执行完成', 'results': results})
+
+
+@trade_bp.route('/sell', methods=['POST'])
+@login_required
+@handle_exceptions
+def sell_stock():
+    """
+    卖出股票/可转债
+    支持：股票（100股为最小单位）、可转债（10张为最小单位）
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': '请求数据不能为空'}), 400
+
+    symbol = data.get('symbol')
+    price = data.get('price')
+    shares = data.get('shares')
+    price_type = data.get('price_type', 0)
+    strategy_name = data.get('strategy_name', 'Web界面')
+
+    if not symbol or price is None or shares is None:
+        return jsonify({'error': '缺少必要参数: symbol, price, shares'}), 400
+
+    log.info(f"开始卖出: symbol={symbol}, price={price}, shares={shares}, strategy={strategy_name}")
 
     results = []
     for i, trader in enumerate(traders):
         try:
             log.info(f"交易器{i}开始卖出")
-            result = trader.trade_sell(symbol, price, shares)  # 使用正确的方法名
+            result = trader.trade_sell(symbol, price, shares, price_type, strategy_name=strategy_name)
             results.append({'trader_index': i, 'result': result, 'status': 'success'})
             log.info(f"交易器{i}卖出完成: {result}")
         except Exception as e:
@@ -264,20 +309,21 @@ def trade():
     trade_price = data.get('trade_price')
     position_pct = data.get('position_pct')
     pricetype = data.get('pricetype', 0)
+    strategy_name = data.get('strategy_name', 'Web界面')
 
     # 参数验证
     if not symbol or trade_price is None or position_pct is None:
         log.error(f"参数不完整: symbol={symbol}, trade_price={trade_price}, position_pct={position_pct}")
         return jsonify({"error": "缺少必要参数: symbol, trade_price, position_pct"}), 400
 
-    log.info(f"开始执行交易: symbol={symbol}, trade_price={trade_price}, position_pct={position_pct}")
+    log.info(f"开始执行交易: symbol={symbol}, trade_price={trade_price}, position_pct={position_pct}, strategy={strategy_name}")
 
     # 执行交易
     results = []
     for i, trader in enumerate(traders):
         try:
             log.info(f"交易器{i}开始执行交易")
-            result = trader.trade_target_pct(symbol, trade_price, position_pct, pricetype)
+            result = trader.trade_target_pct(symbol, trade_price, position_pct, pricetype, strategy_name=strategy_name)
             results.append({"trader_index": i, "result": result, "status": "success"})
             log.info(f"交易器{i}交易完成: {result}")
         except Exception as e:
@@ -293,7 +339,25 @@ def trade():
 @api_signature_required
 @handle_exceptions
 def outer_trade(operation):
-    """第三方调用的交易接口（使用HMAC签名验证）"""
+    """
+    第三方调用的交易接口（使用HMAC签名验证）
+    
+    支持两种交易模式：
+    1. 按仓位比例交易：提供 position_pct 参数 (0-1之间的小数)
+    2. 按固定股数/张数交易：提供 order_num 参数
+       - 股票：必须是100的倍数
+       - 可转债：必须是10的倍数
+    
+    请求参数：
+        - operation: 'buy' 或 'sell' (URL路径参数)
+        - symbol: 股票/可转债代码 (必需)
+        - trade_price: 交易价格 (必需)
+        - price_type: 价格类型，默认0 (可选，0:限价, 1:最新价, 2:最优五档即时成交剩余撤销, 3:本方最优, 5:对方最优)
+        - position_pct: 仓位比例 (与order_num二选一)
+        - order_num: 委托股数/张数 (与position_pct二选一)
+        - trader_index: 交易器索引，不提供则所有交易器执行 (可选)
+        - strategy_name: 策略名称 (可选)
+    """
     if operation not in ['buy', 'sell']:
         return jsonify({"error": "操作类型必须是 buy 或 sell"}), 400
 
@@ -308,33 +372,84 @@ def outer_trade(operation):
     trade_price = data.get('trade_price')
     price_type = data.get('price_type', 0)
     position_pct = data.get('position_pct')
+    order_num = data.get('order_num')
     strategy_name = data.get('strategy_name', '外部策略')
 
-    # 参数验证
-    if not symbol or trade_price is None or position_pct is None:
-        log.error(
-            f"第三方批量{operation}交易参数不完整: symbol={symbol}, trade_price={trade_price}, position_pct={position_pct}")
-        return jsonify({"error": "缺少必要参数: symbol, trade_price, position_pct"}), 400
+    # 基本参数验证
+    if not symbol or trade_price is None:
+        log.error(f"第三方{operation}交易参数不完整: symbol={symbol}, trade_price={trade_price}")
+        return jsonify({"error": "缺少必要参数: symbol, trade_price"}), 400
 
+    # 交易模式参数验证：position_pct 和 order_num 二选一
+    if position_pct is None and order_num is None:
+        log.error(f"第三方{operation}交易缺少交易数量参数")
+        return jsonify({"error": "必须提供 position_pct 或 order_num 其中之一"}), 400
+    
+    if position_pct is not None and order_num is not None:
+        log.error(f"第三方{operation}交易同时提供了position_pct和order_num")
+        return jsonify({"error": "position_pct 和 order_num 不能同时提供，请选择其中一个"}), 400
+
+    # 确定交易模式
+    if position_pct is not None:
+        trade_mode = "position_pct"
+        trade_param = position_pct
+        # 验证仓位比例范围
+        if not (0 <= position_pct <= 1):
+            log.error(f"仓位比例超出范围: {position_pct}")
+            return jsonify({"error": "position_pct 必须在 0 到 1 之间"}), 400
+    else:
+        trade_mode = "order_num"
+        trade_param = order_num
+        # 验证股数/张数
+        if order_num <= 0:
+            log.error(f"委托数量无效: {order_num}")
+            return jsonify({"error": "order_num 必须大于 0"}), 400
+        
+        # 根据证券类型验证最小单位
+        converted_symbol = symbol_util.get_stock_id_xt(symbol)
+        min_unit = get_min_trade_unit(converted_symbol)
+        unit_name = get_unit_name(converted_symbol)
+        
+        if order_num % min_unit != 0:
+            log.error(f"委托{unit_name}数不是{min_unit}的倍数: {order_num}")
+            return jsonify({"error": f"order_num 必须是 {min_unit} 的倍数（{unit_name}）"}), 400
+
+    # 验证交易器索引
     if trader_index is not None and (trader_index >= len(traders) or trader_index < 0):
         log.error(f"无效的交易器索引: {trader_index}")
         return jsonify({"error": f"无效的交易器索引: {trader_index}"}), 400
 
     log.info(
-        f"第三方开始执行{operation}交易: symbol={symbol}, trade_price={trade_price}, position_pct={position_pct}, strategy_name={strategy_name}")
+        f"第三方开始执行{operation}交易: symbol={symbol}, trade_price={trade_price}, "
+        f"trade_mode={trade_mode}, trade_param={trade_param}, price_type={price_type}, strategy_name={strategy_name}")
 
-    accounts = [traders[trader_index]] if trader_index is not None else traders
     # 执行交易
     results = []
-    for i, trader in enumerate(accounts):
+    for i, trader in enumerate(traders):
         try:
-            log.info(f"第三方调用-交易器{i}开始执行{operation}交易")
+            if trader_index is not None and i != trader_index:
+                continue
+
+            log.info(f"第三方调用-交易器{i}开始执行{operation}交易 (模式: {trade_mode})")
+            
+            # 根据操作类型和交易模式选择对应的方法
             if operation == 'buy':
-                result = trader.trade_target_pct(symbol, trade_price, position_pct, price_type)
+                if trade_mode == "position_pct":
+                    # 按仓位比例买入
+                    result = trader.trade_target_pct(symbol, trade_price, position_pct, price_type, strategy_name=strategy_name)
+                else:
+                    # 按固定股数买入
+                    result = trader.trade_buy_shares(symbol, trade_price, order_num, price_type, strategy_name=strategy_name)
             else:  # sell
-                result = trader.trade_sell_target_pct(symbol, trade_price, position_pct, price_type)
+                if trade_mode == "position_pct":
+                    # 按仓位比例卖出
+                    result = trader.trade_sell_target_pct(symbol, trade_price, position_pct, price_type, strategy_name=strategy_name)
+                else:
+                    # 按固定股数卖出
+                    result = trader.trade_sell(symbol, trade_price, order_num, price_type, strategy_name=strategy_name)
+            
             results.append({"trader_index": i, "result": result, "status": "success"})
-            log.info(f"第三方调用-交易器{i}{operation}交易完成: {result}")
+            log.info(f"第三方调用-交易器{i}{operation}交易完成 ({trade_mode}={trade_param}): {result}")
         except Exception as e:
             error_msg = f"第三方调用-交易器{i}{operation}交易失败: {str(e)}"
             log.error(error_msg, exc_info=True)
@@ -344,6 +459,8 @@ def outer_trade(operation):
     return jsonify({
         "message": f"第三方{operation}交易执行完成",
         "operation": operation,
+        "trade_mode": trade_mode,
+        "trade_param": trade_param,
         "strategy_name": strategy_name,
         "results": results
     })
@@ -367,9 +484,12 @@ def trade_allin():
         return jsonify({"error": f"无效的交易器索引: {trader_index}"}), 400
 
     results = []
-    accounts = [traders[trader_index]] if trader_index is not None else traders
-    for i, trader in enumerate(accounts):
+    ##accounts = [traders[trader_index]] if trader_index is not None else traders
+    for i, trader in enumerate(traders):
         try:
+            if trader_index is not None and i != trader_index:
+                continue
+                
             result = trader.trade_allin(symbol, cur_price)
             results.append({'trader_index': i, 'result': result, 'status': 'success'})
         except Exception as e:
@@ -382,24 +502,69 @@ def trade_allin():
 @api_signature_required
 @handle_exceptions
 def nhg():
-    """逆回购接口"""
-
+    """
+    逆回购接口
+    
+    使用可用资金购买逆回购（深圳R-001: 131810.SZ）
+    
+    请求参数:
+        - trader_index: 交易器索引 (可选，不提供则所有交易器执行)
+        - reserve_amount: 保留资金金额（元），默认0表示全部可用资金购买逆回购 (可选)
+                        例如: 1000 表示保留1000元，其余资金购买逆回购
+    
+    示例:
+        {
+            "trader_index": 0,
+            "reserve_amount": 1000
+        }
+    """
     results = []
     data = request.get_json()
+    if not data:
+        data = {}
+    
     trader_index = data.get('trader_index')
+    reserve_amount = data.get('reserve_amount', 0)  # 默认不保留资金
+    
+    # 验证参数
     if trader_index is not None and (trader_index >= len(traders) or trader_index < 0):
         log.error(f"无效的交易器索引: {trader_index}")
         return jsonify({"error": f"无效的交易器索引: {trader_index}"}), 400
+    
+    if reserve_amount < 0:
+        log.error(f"保留金额不能为负数: {reserve_amount}")
+        return jsonify({"error": "保留金额不能为负数"}), 400
 
-    accounts = [traders[trader_index]] if trader_index is not None else traders
-    for i, trader in enumerate(accounts):
+    log.info(f"开始逆回购操作: trader_index={trader_index}, reserve_amount={reserve_amount}")
+
+    for i, trader in enumerate(traders):
         try:
-            trader.nhg()
-            results.append({'trader_index': i, 'status': 'success'})
+            if trader_index is not None and i != trader_index:
+                continue
+            
+            log.info(f"交易器{i}开始逆回购, 保留资金{reserve_amount}元")
+            result = trader.nhg(reserve_amount=reserve_amount)
+            results.append({
+                'trader_index': i, 
+                'result': result,
+                'status': 'success' if result.get('success') else 'failed'
+            })
+            log.info(f"交易器{i}逆回购完成: {result.get('message')}")
         except Exception as e:
-            results.append({'trader_index': i, 'error': str(e), 'status': 'failed'})
+            error_msg = f"交易器{i}逆回购失败: {str(e)}"
+            log.error(error_msg, exc_info=True)
+            results.append({
+                'trader_index': i, 
+                'error': str(e), 
+                'status': 'failed'
+            })
 
-    return jsonify({'message': '逆回购完成', 'results': results})
+    log.info(f"所有交易器逆回购执行完成，结果: {results}")
+    return jsonify({
+        'message': '逆回购执行完成', 
+        'reserve_amount': reserve_amount,
+        'results': results
+    })
 
 
 @trade_bp.route('/cancel_orders/sale', methods=['POST'])
@@ -414,9 +579,12 @@ def cancel_all_orders_sale():
         log.error(f"无效的交易器索引: {trader_index}")
         return jsonify({"error": f"无效的交易器索引: {trader_index}"}), 400
 
-    accounts = [traders[trader_index]] if trader_index is not None else traders
-    for i, trader in enumerate(accounts):
+    ##accounts = [traders[trader_index]] if trader_index is not None else traders
+    for i, trader in enumerate(traders):
         try:
+            if trader_index is not None and i != trader_index:
+                continue
+                
             trader.cancel_all_orders_sale()
             results.append({'trader_index': i, 'status': 'success'})
         except Exception as e:
@@ -437,9 +605,12 @@ def cancel_all_orders_buy():
         log.error(f"无效的交易器索引: {trader_index}")
         return jsonify({"error": f"无效的交易器索引: {trader_index}"}), 400
 
-    accounts = [traders[trader_index]] if trader_index is not None else traders
-    for i, trader in enumerate(accounts):
+    ##accounts = [traders[trader_index]] if trader_index is not None else traders
+    for i, trader in enumerate(traders):
         try:
+            if trader_index is not None and i != trader_index:
+                continue
+                
             trader.cancel_all_orders_buy()
             results.append({'trader_index': i, 'status': 'success'})
         except Exception as e:

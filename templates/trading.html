@@ -369,7 +369,16 @@
                                             </div>
                                             <div class="mb-3">
                                                 <label class="form-label">仓位比例</label>
-                                                <input type="number" class="form-control" id="buyPosition-${accountIndex}" step="0.01" min="0" max="1" value="0.1" required>
+                                                <input type="number" class="form-control" id="buyPosition-${accountIndex}" step="0.01" min="0" max="1" value="0.1" placeholder="0.1" oninput="clearBuyShares(${accountIndex})">
+                                                <small class="form-text text-white-50">范围: 0-1，例如 0.1 表示 10%</small>
+                                            </div>
+                                            <div class="mb-2 text-center">
+                                                <small class="text-white-50">── 或者 ──</small>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">买入股数</label>
+                                                <input type="number" class="form-control" id="buyShares-${accountIndex}" step="100" min="100" placeholder="例如: 500" oninput="clearBuyPosition(${accountIndex})">
+                                                <small class="form-text text-white-50">股数必须是100的倍数</small>
                                             </div>
                                             <button type="submit" class="btn btn-light w-100">
                                                 <i class="bi bi-cart-plus"></i> 买入
@@ -391,7 +400,7 @@
                                                 <input type="number" class="form-control" id="sellPrice-${accountIndex}" step="0.01" placeholder="0.00" required>
                                             </div>
                                             <div class="mb-3">
-                                                <label class="form-label">卖出比例</label>
+                                                <label class="form-label">卖出比例选择</label>
                                                 <div class="d-flex flex-wrap">
                                                     <button type="button" class="btn btn-outline-light btn-position" onclick="setSellRatio(${accountIndex}, 1)">全部</button>
                                                     <button type="button" class="btn btn-outline-light btn-position" onclick="setSellRatio(${accountIndex}, 0.5)">1/2</button>
@@ -400,11 +409,16 @@
                                             </div>
                                             <div class="mb-3">
                                                 <label class="form-label">卖出比例</label>
-                                                <input type="number" class="form-control" id="sellRatio-${accountIndex}" step="0.01" min="0" max="1" value="1" oninput="updateSellShares(${accountIndex})" required>
+                                                <input type="number" class="form-control" id="sellRatio-${accountIndex}" step="0.01" min="0" max="1" value="1" placeholder="1" oninput="updateSellShares(${accountIndex})" required>
+                                                <small class="form-text text-white-50">范围: 0-1，例如 1 表示全部卖出</small>
+                                            </div>
+                                            <div class="mb-2 text-center">
+                                                <small class="text-white-50">── 或者 ──</small>
                                             </div>
                                             <div class="mb-3">
                                                 <label class="form-label">卖出股数</label>
                                                 <input type="number" class="form-control" id="sellShares-${accountIndex}" readonly>
+                                                <small class="form-text text-white-50">自动根据比例计算</small>
                                             </div>
                                             <button type="submit" class="btn btn-light w-100">
                                                 <i class="bi bi-cart-dash"></i> 卖出
@@ -568,6 +582,24 @@
         // 设置买入仓位
         function setPosition(accountIndex, ratio) {
             document.getElementById(`buyPosition-${accountIndex}`).value = ratio;
+            // 清空股数输入
+            document.getElementById(`buyShares-${accountIndex}`).value = '';
+        }
+
+        // 清空买入股数（当输入仓位比例时）
+        function clearBuyShares(accountIndex) {
+            const buyShares = document.getElementById(`buyShares-${accountIndex}`);
+            if (buyShares.value) {
+                buyShares.value = '';
+            }
+        }
+
+        // 清空买入仓位比例（当输入股数时）
+        function clearBuyPosition(accountIndex) {
+            const buyPosition = document.getElementById(`buyPosition-${accountIndex}`);
+            if (buyPosition.value) {
+                buyPosition.value = '';
+            }
         }
 
         // 设置卖出比例
@@ -599,12 +631,122 @@
         // 提交买入订单
         function submitBuyOrder(event, accountIndex) {
             event.preventDefault();
+            
+            const symbol = document.getElementById(`buySymbol-${accountIndex}`).value;
+            const trade_price = parseFloat(document.getElementById(`buyPrice-${accountIndex}`).value);
+            const buyShares = document.getElementById(`buyShares-${accountIndex}`).value;
+            const buyPosition = document.getElementById(`buyPosition-${accountIndex}`).value;
+            
+            // 构建请求数据
             const formData = {
-                symbol: document.getElementById(`buySymbol-${accountIndex}`).value,
-                trade_price: parseFloat(document.getElementById(`buyPrice-${accountIndex}`).value),
-                position_pct: parseFloat(document.getElementById(`buyPosition-${accountIndex}`).value)
+                symbol: symbol,
+                trade_price: trade_price
             };
-
+            
+            // 判断使用哪种模式：优先使用股数，否则使用仓位比例
+            if (buyShares && buyShares.trim() !== '') {
+                // 按固定股数买入
+                const shares = parseInt(buyShares);
+                
+                // 验证股数是100的倍数
+                if (shares % 100 !== 0) {
+                    showToast('买入股数必须是100的倍数', 'error');
+                    return;
+                }
+                
+                // 显示确认框
+                const estimatedAmount = shares * trade_price;
+                const confirmMessage = `确认买入订单？\n\n` +
+                    `股票代码: ${symbol}\n` +
+                    `交易方向: 买入\n` +
+                    `买入价格: ¥${trade_price.toFixed(2)}\n` +
+                    `买入股数: ${shares}股\n` +
+                    `预计金额: ¥${estimatedAmount.toFixed(2)}`;
+                
+                if (!confirm(confirmMessage)) {
+                    return;  // 用户取消
+                }
+                
+                // 调用按固定股数买入接口
+                fetch('/qmt/trade/api/buy', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        symbol: symbol,
+                        price: trade_price,
+                        shares: shares
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        showToast(data.error, 'error');
+                    } else {
+                        showToast(`已提交买入订单: ${shares}股`, 'success');
+                        refreshAccountData(accountIndex);
+                        document.getElementById(`buyForm-${accountIndex}`).reset();
+                        // 重置默认值
+                        document.getElementById(`buyPosition-${accountIndex}`).value = '0.1';
+                    }
+                })
+                .catch(error => {
+                    console.error('买入失败:', error);
+                    showToast('买入失败', 'error');
+                });
+            } else if (buyPosition && buyPosition.trim() !== '') {
+                // 按仓位比例买入
+                const positionPct = parseFloat(buyPosition);
+                formData.position_pct = positionPct;
+                
+                // 获取账户信息计算预计金额
+                fetch(`/qmt/trade/api/portfolio/${accountIndex}`)
+                    .then(response => response.json())
+                    .then(portfolioData => {
+                        const totalAsset = portfolioData.portfolio.total_asset || 0;
+                        const estimatedValue = totalAsset * positionPct;
+                        const estimatedShares = Math.floor(estimatedValue / trade_price / 100) * 100;
+                        const estimatedAmount = estimatedShares * trade_price;
+                        
+                        // 显示确认框
+                        const confirmMessage = `确认买入订单？\n\n` +
+                            `股票代码: ${symbol}\n` +
+                            `交易方向: 买入\n` +
+                            `买入价格: ¥${trade_price.toFixed(2)}\n` +
+                            `仓位比例: ${(positionPct * 100).toFixed(1)}%\n` +
+                            `预计股数: 约${estimatedShares}股\n` +
+                            `预计金额: 约¥${estimatedAmount.toFixed(2)}`;
+                        
+                        if (!confirm(confirmMessage)) {
+                            return;  // 用户取消
+                        }
+                        
+                        // 用户确认后执行买入
+                        executeBuyByPosition(formData, accountIndex);
+                    })
+                    .catch(error => {
+                        console.error('获取账户信息失败:', error);
+                        // 即使获取失败，也显示基本确认框
+                        const confirmMessage = `确认买入订单？\n\n` +
+                            `股票代码: ${symbol}\n` +
+                            `交易方向: 买入\n` +
+                            `买入价格: ¥${trade_price.toFixed(2)}\n` +
+                            `仓位比例: ${(positionPct * 100).toFixed(1)}%`;
+                        
+                        if (!confirm(confirmMessage)) {
+                            return;  // 用户取消
+                        }
+                        
+                        executeBuyByPosition(formData, accountIndex);
+                    });
+            } else {
+                showToast('请输入仓位比例或买入股数', 'error');
+            }
+        }
+        
+        // 执行按仓位比例买入
+        function executeBuyByPosition(formData, accountIndex) {
             fetch('/qmt/trade/api/trade', {
                 method: 'POST',
                 headers: {
@@ -620,6 +762,8 @@
                     showToast('买入订单已提交', 'success');
                     refreshAccountData(accountIndex);
                     document.getElementById(`buyForm-${accountIndex}`).reset();
+                    // 重置默认值
+                    document.getElementById(`buyPosition-${accountIndex}`).value = '0.1';
                 }
             })
             .catch(error => {
@@ -631,10 +775,39 @@
         // 提交卖出订单
         function submitSellOrder(event, accountIndex) {
             event.preventDefault();
+            
+            const symbol = document.getElementById(`sellSymbol-${accountIndex}`).value;
+            const price = parseFloat(document.getElementById(`sellPrice-${accountIndex}`).value);
+            const shares = parseInt(document.getElementById(`sellShares-${accountIndex}`).value);
+            const sellRatio = parseFloat(document.getElementById(`sellRatio-${accountIndex}`).value);
+            
+            // 计算预计金额
+            const estimatedAmount = shares * price;
+            
+            // 获取股票名称
+            const sellSelect = document.getElementById(`sellSymbol-${accountIndex}`);
+            const selectedOption = sellSelect.selectedOptions[0];
+            const symbolText = selectedOption ? selectedOption.textContent : symbol;
+            
+            // 显示确认框
+            const confirmMessage = `确认卖出订单？\n\n` +
+                `股票信息: ${symbolText}\n` +
+                `股票代码: ${symbol}\n` +
+                `交易方向: 卖出\n` +
+                `卖出价格: ¥${price.toFixed(2)}\n` +
+                `卖出比例: ${(sellRatio * 100).toFixed(1)}%\n` +
+                `卖出股数: ${shares}股\n` +
+                `预计金额: ¥${estimatedAmount.toFixed(2)}`;
+            
+            if (!confirm(confirmMessage)) {
+                return;  // 用户取消
+            }
+            
+            // 用户确认后执行卖出
             const formData = {
-                symbol: document.getElementById(`sellSymbol-${accountIndex}`).value,
-                price: parseFloat(document.getElementById(`sellPrice-${accountIndex}`).value),
-                shares: parseInt(document.getElementById(`sellShares-${accountIndex}`).value)
+                symbol: symbol,
+                price: price,
+                shares: shares
             };
 
             fetch('/qmt/trade/api/sell', {
