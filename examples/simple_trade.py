@@ -22,14 +22,22 @@ def main():
     print("QMT交易客户端 - 简单交易示例")
     print("=" * 60)
     
-    # 创建客户端（请替换为您的配置）
-    # ✨ 设置 trader_index=0，后续调用无需再传递
-    client = QMTTradeClient(
-        base_url="http://localhost:9091",
-        client_id="your_client_id",
-        secret_key="your_secret_key",
-        trader_index=0  # ✨ 只需设置一次
-    )
+    # 创建客户端
+    # 
+    # 方式1: 从 .env 文件自动读取配置（推荐）
+    # 只需在项目根目录创建 .env 文件，配置好参数即可
+    client = QMTTradeClient()  # ✨ 自动从 .env 读取所有配置
+    
+    # 方式2: 手动指定参数（仍然支持）
+    # client = QMTTradeClient(
+    #     base_url="http://localhost:9091",
+    #     client_id="your_client_id",
+    #     secret_key="your_secret_key",
+    #     trader_index=0
+    # )
+    
+    # 方式3: .env + 手动覆盖（优先级：手动参数 > .env > 默认值）
+    # client = QMTTradeClient(trader_index=1)  # 其他参数从 .env 读取，只覆盖 trader_index
     
     # 1. 查询账户资产
     print("\n【1. 查询账户资产】")

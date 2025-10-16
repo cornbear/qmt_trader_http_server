@@ -21,7 +21,9 @@ xtquant
 
 # 开发和调试工具（可选）
 requests==2.31.0
-python-dotenv==1.0.0
+
+# 配置管理
+python-dotenv==1.0.0  # 用于从 .env 文件读取配置
 
 # 注意事项：
 # 1. xtquant是QMT专用的量化交易接口，需要从QMT官方获取

@@ -50,8 +50,17 @@ import hashlib
 import time
 import json
 import requests
+import os
 from typing import Optional, Dict, List, Any, Union
 from datetime import datetime
+from pathlib import Path
+
+# 尝试导入 dotenv，如果没有安装则跳过
+try:
+    from dotenv import load_dotenv
+    DOTENV_AVAILABLE = True
+except ImportError:
+    DOTENV_AVAILABLE = False
 
 
 class QMTTradeClientError(Exception):
@@ -80,34 +89,67 @@ class QMTTradeClient:
     
     def __init__(
         self, 
-        base_url: str = "http://localhost:9091",
+        base_url: Optional[str] = None,
         client_id: Optional[str] = None,
         secret_key: Optional[str] = None,
-        timeout: int = 30,
-        trader_index: int = 0
+        timeout: Optional[int] = None,
+        trader_index: Optional[int] = None,
+        env_file: Optional[str] = ".env"
     ):
         """
         初始化QMT交易客户端
         
+        参数可以通过以下方式提供（优先级从高到低）：
+        1. 直接传入参数
+        2. 从 .env 文件读取
+        3. 使用默认值
+        
         Args:
-            base_url: QMT服务器地址，默认 http://localhost:9091
-            client_id: API客户端ID（使用签名认证时必需）
-            secret_key: API密钥（使用签名认证时必需）
-            timeout: 请求超时时间（秒），默认30秒
-            trader_index: 默认交易器索引，默认0（可在调用时覆盖）
+            base_url: QMT服务器地址，默认从 QMT_BASE_URL 环境变量读取，最终默认 http://localhost:9091
+            client_id: API客户端ID，默认从 QMT_CLIENT_ID 环境变量读取
+            secret_key: API密钥，默认从 QMT_SECRET_KEY 环境变量读取
+            timeout: 请求超时时间（秒），默认从 QMT_TIMEOUT 环境变量读取，最终默认30秒
+            trader_index: 默认交易器索引，默认从 QMT_TRADER_INDEX 环境变量读取，最终默认0
+            env_file: .env 文件路径，默认为当前目录的 .env 文件，设为 None 则不加载
+        
+        环境变量说明：
+            - QMT_BASE_URL: 服务器地址
+            - QMT_CLIENT_ID: 客户端ID
+            - QMT_SECRET_KEY: 密钥
+            - QMT_TIMEOUT: 超时时间
+            - QMT_TRADER_INDEX: 默认交易器索引
         """
-        self.base_url = base_url.rstrip('/')
-        self.client_id = client_id
-        self.secret_key = secret_key
-        self.timeout = timeout
-        self.trader_index = trader_index
+        # 加载 .env 文件
+        if env_file and DOTENV_AVAILABLE:
+            env_path = Path(env_file)
+            if env_path.exists():
+                load_dotenv(env_path)
+                print(f"✓ 已加载配置文件: {env_file}")
+            elif env_file == ".env":
+                # 默认 .env 文件不存在时不报错
+                pass
+            else:
+                # 显式指定的文件不存在时提示
+                print(f"⚠️  配置文件不存在: {env_file}")
+        elif env_file and not DOTENV_AVAILABLE:
+            print("⚠️  未安装 python-dotenv，无法加载 .env 文件")
+            print("   安装方法: pip install python-dotenv")
+        
+        # 从环境变量或参数获取配置（参数优先）
+        self.base_url = (base_url or 
+                        os.getenv('QMT_BASE_URL', 'http://localhost:9091')).rstrip('/')
+        self.client_id = client_id or os.getenv('QMT_CLIENT_ID')
+        self.secret_key = secret_key or os.getenv('QMT_SECRET_KEY')
+        self.timeout = timeout or int(os.getenv('QMT_TIMEOUT', '30'))
+        self.trader_index = trader_index if trader_index is not None else int(os.getenv('QMT_TRADER_INDEX', '0'))
+        
         self.session = requests.Session()
-        self.use_signature = bool(client_id and secret_key)
+        self.use_signature = bool(self.client_id and self.secret_key)
         
         if self.use_signature:
-            print(f"✓ 使用API签名认证模式 (client_id: {client_id}, trader_index: {trader_index})")
+            print(f"✓ 使用API签名认证模式 (client_id: {self.client_id}, trader_index: {self.trader_index})")
         else:
-            print(f"✓ 使用登录会话认证模式 (trader_index: {trader_index})")
+            print(f"✓ 使用登录会话认证模式 (trader_index: {self.trader_index})")
     
     def _generate_signature(
         self, 
